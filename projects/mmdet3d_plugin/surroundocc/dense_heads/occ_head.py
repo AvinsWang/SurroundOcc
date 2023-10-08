@@ -199,7 +199,8 @@ class OccHead(nn.Module):
             volume_z = self.volume_z[i]
 
             _, _, C, H, W = mlvl_feats[i].shape
-            view_features = self.transfer_conv[i](mlvl_feats[i].reshape(bs*num_cam, C, H, W)).reshape(bs, num_cam, -1, H, W)
+            view_features = self.transfer_conv[i](mlvl_feats[i].reshape(
+                bs*num_cam, C, H, W)).reshape(bs, num_cam, -1, H, W)
 
             volume_embed_i = self.transformer[i](
                 [view_features],
@@ -218,7 +219,8 @@ class OccHead(nn.Module):
             volume_w = self.volume_w[i]
             volume_z = self.volume_z[i]
 
-            volume_embed_reshape_i = volume_embed[i].reshape(bs, volume_z, volume_h, volume_w, -1).permute(0, 4, 3, 2, 1)
+            volume_embed_reshape_i = volume_embed[i].reshape(
+                bs, volume_z, volume_h, volume_w, -1).permute(0, 4, 3, 2, 1)
             
             volume_embed_reshape.append(volume_embed_reshape_i)
         
@@ -233,14 +235,11 @@ class OccHead(nn.Module):
                 volume_embed_temp = volume_embed_reshape.pop()
                 result = result + volume_embed_temp
             
-
-
         occ_preds = []
         for i in range(len(outputs)):
             occ_pred = self.occ[i](outputs[i])
             occ_preds.append(occ_pred)
 
-       
         outs = {
             'volume_embed': volume_embed,
             'occ_preds': occ_preds,
@@ -248,54 +247,29 @@ class OccHead(nn.Module):
 
         return outs
 
-
     @force_fp32(apply_to=('preds_dicts'))
-    def loss(self,
-             gt_occ,
-             preds_dicts,
-             img_metas):
-     
+    def loss(self, gt_occ, preds_dicts, img_metas):
         if not self.use_semantic:
             loss_dict = {}
             for i in range(len(preds_dicts['occ_preds'])):
-
                 pred = preds_dicts['occ_preds'][i][:, 0]
-                
                 ratio = 2**(len(preds_dicts['occ_preds']) - 1 - i)
-
                 gt = multiscale_supervision(gt_occ.clone(), ratio, preds_dicts['occ_preds'][i].shape)
-                
                 #gt = torch.mode(gt, dim=-1)[0].float()
-                    
                 loss_occ_i = (F.binary_cross_entropy_with_logits(pred, gt) + geo_scal_loss(pred, gt.long(), semantic=False))
-                    
-                loss_occ_i =  loss_occ_i * ((0.5)**(len(preds_dicts['occ_preds']) - 1 -i)) #* focal_weight
-
+                loss_occ_i = loss_occ_i * ((0.5)**(len(preds_dicts['occ_preds']) - 1 -i)) #* focal_weight
                 loss_dict['loss_occ_{}'.format(i)] = loss_occ_i
-    
         else:
             pred = preds_dicts['occ_preds']
-            
-            criterion = nn.CrossEntropyLoss(
-                ignore_index=255, reduction="mean"
-            )
-            
+            criterion = nn.CrossEntropyLoss(ignore_index=255, reduction="mean")
             loss_dict = {}
-        
             for i in range(len(preds_dicts['occ_preds'])):
-
                 pred = preds_dicts['occ_preds'][i]
                 ratio = 2**(len(preds_dicts['occ_preds']) - 1 - i)
-                
                 gt = multiscale_supervision(gt_occ.clone(), ratio, preds_dicts['occ_preds'][i].shape)
-
                 loss_occ_i = (criterion(pred, gt.long()) + sem_scal_loss(pred, gt.long()) + geo_scal_loss(pred, gt.long()))
-
                 loss_occ_i = loss_occ_i * ((0.5)**(len(preds_dicts['occ_preds']) - 1 -i))
-
                 loss_dict['loss_occ_{}'.format(i)] = loss_occ_i
-
-                    
         return loss_dict
 
         
