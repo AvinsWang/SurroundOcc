@@ -257,4 +257,8 @@ def main():
 
 
 if __name__ == '__main__':
+    import sys
+    t = os.path.join(os.path.dirname(__file__), '..')
+    print(t)
+    sys.path.append(t)
     main()

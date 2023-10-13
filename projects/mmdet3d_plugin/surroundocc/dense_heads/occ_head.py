@@ -198,7 +198,7 @@ class OccHead(nn.Module):
             volume_w = self.volume_w[i]
             volume_z = self.volume_z[i]
 
-            _, _, C, H, W = mlvl_feats[i].shape
+            _, _, C, H, W = mlvl_feats[i].shape # [1, 6, 512, 116, 200] -> [1, 6, 128, 116, 200]
             view_features = self.transfer_conv[i](mlvl_feats[i].reshape(
                 bs*num_cam, C, H, W)).reshape(bs, num_cam, -1, H, W)
 
@@ -212,7 +212,6 @@ class OccHead(nn.Module):
             )
             volume_embed.append(volume_embed_i)
         
-
         volume_embed_reshape = []
         for i in range(self.fpn_level):
             volume_h = self.volume_h[i]

@@ -111,8 +111,16 @@ class SurroundOcc(MVXTwoStageDetector):
                           gt_occ,
                           img_metas):
 
-        outs = self.pts_bbox_head(
-            pts_feats, img_metas)
+        outs = self.pts_bbox_head(pts_feats, img_metas)
+        # outs['volume_embed']: 
+        # torch.Size([1, 80000, 128])
+        # torch.Size([1, 10000, 256])
+        # torch.Size([1, 1250, 512])
+        # out['occ_preds']
+        # torch.Size([1, 17, 25, 25, 2])
+        # torch.Size([1, 17, 50, 50, 4])
+        # torch.Size([1, 17, 100, 100, 8])
+        # torch.Size([1, 17, 200, 200, 16])
         loss_inputs = [gt_occ, outs]
         losses = self.pts_bbox_head.loss(*loss_inputs, img_metas=img_metas)
         return losses
@@ -143,7 +151,10 @@ class SurroundOcc(MVXTwoStageDetector):
                       gt_occ=None,
                       img=None
                       ):
-
+        # img: [1, 6, 3, 928, 1600] ->
+        # torch.Size([1, 6, 512, 116, 200])
+        # torch.Size([1, 6, 512, 58, 100])
+        # torch.Size([1, 6, 512, 29, 50])
         img_feats = self.extract_feat(img=img, img_metas=img_metas)
         losses = dict()
         losses_pts = self.forward_pts_train(img_feats, gt_occ,

@@ -451,7 +451,9 @@ def main(nusc, val_list, indice, nuscenesyaml, args, config):
         dirs = os.path.join(save_path, 'dense_voxels_with_semantic/')
         if not os.path.exists(dirs):
             os.makedirs(dirs)
-        np.save(os.path.join(dirs, dict['pc_file_name'] + '.npy'), dense_voxels_with_semantic)
+        saved_path = os.path.join(dirs, dict['pc_file_name'] + '.npy')
+        np.save(saved_path, dense_voxels_with_semantic)
+        print('存储npy', i, saved_path)
 
         i = i + 1
         continue
@@ -477,7 +479,6 @@ if __name__ == '__main__':
     parse.add_argument('--nusc_val_list', type=str, default='./nuscenes_val_list.txt')
     parse.add_argument('--label_mapping', type=str, default='nuscenes.yaml')
     args=parse.parse_args()
-
 
     if args.dataset=='nuscenes':
         val_list = []

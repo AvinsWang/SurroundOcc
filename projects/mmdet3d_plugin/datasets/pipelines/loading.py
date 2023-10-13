@@ -44,3 +44,15 @@ class LoadOccupancy(object):
         repr_str = self.__class__.__name__
         return repr_str
 
+
+import open3d as o3d
+
+
+def save_pcd(points, out_path):
+    points = points.view(-1, 3).cpu().numpy()
+    # 创建Open3D的点云对象
+    pcd = o3d.geometry.PointCloud()
+    pcd.points = o3d.utility.Vector3dVector(points)
+
+    # 存储点云数据
+    o3d.io.write_point_cloud(out_path, pcd)

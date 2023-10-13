@@ -30,7 +30,7 @@ class CustomNuScenesOccDataset(NuScenesDataset):
         self.use_semantic = use_semantic
         self.class_names = classes
         self._set_group_flag()
-        
+
     def prepare_train_data(self, index):
         """Training data preparation.
 
@@ -67,11 +67,23 @@ class CustomNuScenesOccDataset(NuScenesDataset):
                 - ann_info (dict): Annotation info.
         """
         info = self.data_infos[index]
+        # 获取全尺寸的occ标注, 用来验证裁剪
+        socc_anno_dirs = ['data/nuscenes/surroundocc/vertice_train',
+                          'data/nuscenes/surroundocc/vertice_val']
+        _name = osp.split(info['occ_path'])[-1]
+        occ_full_path = None
+        for _dir in socc_anno_dirs:
+            _path = osp.join(_dir, _name)
+            if osp.exists(_path):
+                occ_full_path = _path
+        assert occ_full_path is not None
+
         # standard protocal modified from SECOND.Pytorch
         input_dict = dict(
             occ_path=info['occ_path'],
-            occ_size = np.array(self.occ_size),
-            pc_range = np.array(self.pc_range)
+            occ_full_path=occ_full_path,
+            occ_size=np.array(self.occ_size),
+            pc_range=np.array(self.pc_range)
         )
 
         if self.modality['use_camera']:
@@ -95,8 +107,6 @@ class CustomNuScenesOccDataset(NuScenesDataset):
                 intrinsic = cam_info['cam_intrinsic']
                 viewpad = np.eye(4)
                 viewpad[:intrinsic.shape[0], :intrinsic.shape[1]] = intrinsic
-
-                
 
                 lidar2img_rt = (viewpad @ lidar2cam_rt.T)
                 lidar2img_rts.append(lidar2img_rt)
