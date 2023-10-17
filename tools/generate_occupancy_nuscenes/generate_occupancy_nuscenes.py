@@ -25,9 +25,7 @@ from copy import deepcopy
 
 def run_poisson(pcd, depth, n_threads, min_density=None):
     mesh, densities = o3d.geometry.TriangleMesh.create_from_point_cloud_poisson(
-        pcd, depth=depth, n_threads=8
-    )
-
+        pcd, depth=depth, n_threads=8)
     # Post-process the mesh
     if min_density:
         vertices_to_remove = densities < np.quantile(densities, min_density)
@@ -36,14 +34,16 @@ def run_poisson(pcd, depth, n_threads, min_density=None):
 
     return mesh, densities
 
-def create_mesh_from_map(buffer, depth, n_threads, min_density=None, point_cloud_original= None):
 
+def create_mesh_from_map(buffer, depth, n_threads, min_density=None,
+                         point_cloud_original= None):
     if point_cloud_original is None:
         pcd = buffer_to_pointcloud(buffer)
     else:
         pcd = point_cloud_original
 
     return run_poisson(pcd, depth, n_threads, min_density)
+
 
 def buffer_to_pointcloud(buffer, compute_normals=False):
     pcd = o3d.geometry.PointCloud()
@@ -55,12 +55,7 @@ def buffer_to_pointcloud(buffer, compute_normals=False):
     return pcd
 
 
-def preprocess_cloud(
-    pcd,
-    max_nn=20,
-    normals=None,
-):
-
+def preprocess_cloud(pcd, max_nn=20, normals=None,):
     cloud = deepcopy(pcd)
     if normals:
         params = o3d.geometry.KDTreeSearchParamKNN(max_nn)
@@ -71,20 +66,17 @@ def preprocess_cloud(
 
 
 def preprocess(pcd, config):
-    return preprocess_cloud(
-        pcd,
-        config['max_nn'],
-        normals=True
-    )
+    return preprocess_cloud(pcd, config['max_nn'], normals=True)
+
 
 def nn_correspondance(verts1, verts2):
     """ for each vertex in verts2 find the nearest vertex in verts1
 
-        Args:
-            nx3 np.array's
-        Returns:
-            ([indices], [distances])
+    Args:
+        nx3 np.array's
 
+    Returns:
+        ([indices], [distances])
     """
     import open3d as o3d
 
@@ -104,12 +96,8 @@ def nn_correspondance(verts1, verts2):
     return indices, distances
 
 
-
-
 def lidar_to_world_to_lidar(pc,lidar_calibrated_sensor,lidar_ego_pose,
-    cam_calibrated_sensor,
-    cam_ego_pose):
-
+                            cam_calibrated_sensor, cam_ego_pose):
     pc = LidarPointCloud(pc.T)
     pc.rotate(Quaternion(lidar_calibrated_sensor['rotation']).rotation_matrix)
     pc.translate(np.array(lidar_calibrated_sensor['translation']))
@@ -127,7 +115,6 @@ def lidar_to_world_to_lidar(pc,lidar_calibrated_sensor,lidar_ego_pose,
 
 
 def main(nusc, val_list, indice, nuscenesyaml, args, config):
-
     save_path = args.save_path
     data_root = args.dataroot
     learning_map = nuscenesyaml['learning_map']
@@ -148,7 +135,6 @@ def main(nusc, val_list, indice, nuscenesyaml, args, config):
         pass
     else:
         raise NotImplementedError
-
 
     # load the first sample to start
     first_sample_token = my_scene['first_sample_token']
@@ -298,16 +284,13 @@ def main(nusc, val_list, indice, nuscenesyaml, args, config):
                         object_points_dict[query_object_token].append(rotated_object_points)
                 else:
                     continue
-        object_points_dict[query_object_token] = np.concatenate(object_points_dict[query_object_token],
-                                                                axis=0)
-
-
+        object_points_dict[query_object_token] = np.concatenate(
+            object_points_dict[query_object_token], axis=0)
     object_points_vertice = []
     for key in object_points_dict.keys():
         point_cloud = object_points_dict[key]
         object_points_vertice.append(point_cloud[:,:3])
     # print('object finish')
-
 
     i = 0
     while int(i) < 10000:  # Assuming the sequence does not have more than 10000 frames
@@ -478,9 +461,9 @@ if __name__ == '__main__':
     parse.add_argument('--dataroot', type=str, default='../../data/nuscenes/')
     parse.add_argument('--nusc_val_list', type=str, default='./nuscenes_val_list.txt')
     parse.add_argument('--label_mapping', type=str, default='nuscenes.yaml')
-    args=parse.parse_args()
+    args = parse.parse_args()
 
-    if args.dataset=='nuscenes':
+    if args.dataset == 'nuscenes':
         val_list = []
         with open(args.nusc_val_list, 'r') as file:
             for item in file:
@@ -504,8 +487,7 @@ if __name__ == '__main__':
     with open(label_mapping, 'r') as stream:
         nuscenesyaml = yaml.safe_load(stream)
 
-
-    for i in range(args.start,args.end):
+    for i in range(args.start, args.end):
         print('processing sequecne:', i)
         main(nusc, val_list, indice=i,
              nuscenesyaml=nuscenesyaml, args=args, config=config)

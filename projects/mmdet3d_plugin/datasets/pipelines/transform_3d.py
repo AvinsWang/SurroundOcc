@@ -252,7 +252,7 @@ class CustomCollect3D(object):
                             'pcd_scale_factor', 'pcd_rotation', 'pts_filename',
                             'transformation_3d_flow', 'scene_token',
                             'can_bus', 'pc_range', 'occ_size', 'occ_path', 'lidar_token',
-                            'occ_full_path'
+                            'occ_full_path', 'lidar_path', 'lidar2cam', 'cam_intrinsic'
                             )):
         self.keys = keys
         self.meta_keys = meta_keys

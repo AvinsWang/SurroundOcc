@@ -9,7 +9,7 @@ plugin_dir = 'projects/mmdet3d_plugin/'
 # If point cloud range is changed, the models should also change their point
 # cloud range accordingly
 point_cloud_range = [-15.0, -30.0, -10.0, 15.0, 30.0, 10.0]
-occ_size = [200, 200, 16]
+occ_size = [200, 400, 20]
 use_semantic = True
 
 

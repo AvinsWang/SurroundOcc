@@ -80,6 +80,7 @@ class CustomNuScenesOccDataset(NuScenesDataset):
 
         # standard protocal modified from SECOND.Pytorch
         input_dict = dict(
+            lidar_path=info['lidar_path'],
             occ_path=info['occ_path'],
             occ_full_path=occ_full_path,
             occ_size=np.array(self.occ_size),

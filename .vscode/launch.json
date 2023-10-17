@@ -22,7 +22,7 @@
             "program": "${workspaceFolder}/tools/train.py",
             "console": "integratedTerminal",
             "justMyCode": false,
-            "env":{"CUDA_VISIBLE_DEVICES":"3"},
+            "env":{"CUDA_VISIBLE_DEVICES":"0"},
             "args": [
                 "./projects/configs/surroundocc/surroundocc.py",
             ]
@@ -34,7 +34,7 @@
             "program": "${workspaceFolder}/tools/train.py",
             "console": "integratedTerminal",
             "justMyCode": false,
-            "env":{"CUDA_VISIBLE_DEVICES":"3"},
+            "env":{"CUDA_VISIBLE_DEVICES":"0"},
             "args": [
                 "./projects/configs/surroundocc/surroundocc_cus.py",
             ]
