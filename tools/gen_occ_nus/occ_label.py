@@ -2,8 +2,9 @@ import os
 import torch
 import numpy as np
 import os.path as osp
-from scipy.spatial.transform import Rotation
+from loguru import logger
 from tools.gen_occ_nus import utils
+from scipy.spatial.transform import Rotation
 
 
 pj_M = utils.get_3d_project_matrix
@@ -12,10 +13,12 @@ pc_project = utils.pc_project
 
 
 class OccLabel:
-    def __init__(self, nusc, idx, cfg) -> None:
+    def __init__(self, nusc, cfg, idx=None) -> None:
         self.nusc = nusc
         self.idx = idx
         self.cfg = cfg
+        # # converted frame count
+        self.frame_cnt = 0
 
     def load_val_lis(self):
         _val = list()
@@ -171,7 +174,7 @@ class OccLabel:
         if ((self.cfg.split == 'train' and tk in self.cfg.sampe_val_tk_lis) or
             (self.cfg.split == 'val' and tk not in self.cfg.sampe_val_tk_lis)):
             return
-            
+
         sensor_tk_lis = self.get_all_lidar_of_scene(scene)
 
         lidar02glb = self.get_sensor2glb(sensor_tk_lis[0])['sens2glb']
@@ -240,7 +243,7 @@ class OccLabel:
                 k = obj_tk_lis.index(obj_tk)
                 # 合并的动态物体点旋转回当前帧的角度
                 obj_pts = obj_pts_dic[obj_tk]
-                rot = Rotation.from_euler('z', gt_bbox_3d[:, 6:7][j], degrees=False)
+                rot = Rotation.from_euler('z', gt_bbox_3d[:, 6:7][j],degrees=False)
                 roted_obj_pts = rot.apply(obj_pts)
                 obj_pts = roted_obj_pts + gt_bbox_3d[:, :3][j]
                 # 获取在bbox框内的动态物体点云
@@ -276,16 +279,16 @@ class OccLabel:
         path = osp.join(self.cfg.save_dir, file_name + '.npy')
         os.makedirs(osp.split(path)[0], exist_ok=True)
         np.save(path, pcd)
+        logger.info(f"[{self.frame_cnt}] saved at: {path}")
 
     def restore_occ_dense_label(self):
-        # query_obj_pts_lis = list(obj_pts_dic.values())
         scene_dic = self.split_scene()
         meta_lis = scene_dic['meta_lis']
 
         pc_range = np.array(self.cfg.pc_range)
         voxel_size = np.array(self.cfg.voxel_size)
 
-        for i, dic in enumerate(meta_lis):
+        for dic in meta_lis:
             if not dic['is_key_frame']:
                 continue
 
@@ -299,7 +302,7 @@ class OccLabel:
 
             grid = utils.get_grid_index(voxel.shape)
             fov_voxels = grid[voxel > 0]
-            # 
+
             fov_voxels[:, :3] = (fov_voxels[:, :3] + voxel_size) * voxel_size
             # 变换到到lidar坐标系
             fov_voxels[:, :3] += pc_range[:3]
@@ -308,7 +311,13 @@ class OccLabel:
             # 变换到体素坐标系
             res_pc[:, :3] = (res_pc[:, :3] - pc_range[:3]) / voxel_size
             res_pc = np.floor(res_pc).astype(int)
+            logger.debug('Finished converted')
             self.save_dense_label(res_pc, dic['lidar_file_name'])
+
+    def run(self):
+        for scene_idx in range(*self.cfg.scene_range):
+            self.idx = scene_idx
+            self.restore_occ_dense_label()
 
 
 if __name__ == '__main__':
@@ -323,6 +332,10 @@ if __name__ == '__main__':
 
     _nusc = NuScenes(dataroot=cfg.data_root, version=cfg.version)
 
-    occ_label = OccLabel(_nusc, 1, cfg)
-    occ_label.restore_occ_dense_label()
-    print()
+    # debug
+    # occ_label = OccLabel(_nusc, cfg, idx=0)
+    # occ_label.restore_occ_dense_label()
+
+    # run
+    occ_label = OccLabel(_nusc, cfg)
+    occ_label.run()

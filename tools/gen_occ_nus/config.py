@@ -5,6 +5,7 @@ cfg = {
     'nusc_val_fpath': 'tools/gen_occ_nus/nuscenes_val_list.txt',
     'split': 'train',
     'save_dir': './dense_occ',
+    'log_path': './dense_occ.log',
     'scene_range': [0, 850],
     'voxel_size': [0.5, 0.5, 0.5],
     'pc_range': [-50, -50, -5, 50, 50, 3],
@@ -17,7 +18,6 @@ cfg = {
         'downsample': False,
         'max_nn': 20,
     },
-    
 }
 
 
