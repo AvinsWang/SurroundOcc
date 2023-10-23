@@ -1,10 +1,14 @@
 import os
+import sys
+import time
 import torch
 import numpy as np
 import os.path as osp
 from loguru import logger
-from tools.gen_occ_nus import utils
 from scipy.spatial.transform import Rotation
+
+sys.path.append(osp.join(osp.dirname(__file__), '../..'))
+from tools.gen_occ_nus import utils
 
 
 pj_M = utils.get_3d_project_matrix
@@ -243,7 +247,7 @@ class OccLabel:
                 k = obj_tk_lis.index(obj_tk)
                 # 合并的动态物体点旋转回当前帧的角度
                 obj_pts = obj_pts_dic[obj_tk]
-                rot = Rotation.from_euler('z', gt_bbox_3d[:, 6:7][j],degrees=False)
+                rot = Rotation.from_euler('z', gt_bbox_3d[:, 6:7][j], degrees=False)
                 roted_obj_pts = rot.apply(obj_pts)
                 obj_pts = roted_obj_pts + gt_bbox_3d[:, :3][j]
                 # 获取在bbox框内的动态物体点云
@@ -275,12 +279,6 @@ class OccLabel:
 
         return merge_pc, merge_seg_pc
 
-    def save_dense_label(self, pcd, file_name):
-        path = osp.join(self.cfg.save_dir, file_name + '.npy')
-        os.makedirs(osp.split(path)[0], exist_ok=True)
-        np.save(path, pcd)
-        logger.info(f"[{self.frame_cnt}] saved at: {path}")
-
     def restore_occ_dense_label(self):
         scene_dic = self.split_scene()
         meta_lis = scene_dic['meta_lis']
@@ -291,7 +289,7 @@ class OccLabel:
         for dic in meta_lis:
             if not dic['is_key_frame']:
                 continue
-
+            st_time = time.time()
             merge_pc, merge_seg_pc = self.merge_moving_objects(scene_dic, dic)
             # voxelize
             voxel_pc = merge_pc.copy()
@@ -307,12 +305,17 @@ class OccLabel:
             # 变换到到lidar坐标系
             fov_voxels[:, :3] += pc_range[:3]
 
-            res_pc = utils.get_dense_seg_label(merge_pc, merge_seg_pc)
+            res_pc = utils.get_dense_seg_label(fov_voxels, merge_seg_pc)
             # 变换到体素坐标系
             res_pc[:, :3] = (res_pc[:, :3] - pc_range[:3]) / voxel_size
             res_pc = np.floor(res_pc).astype(int)
             logger.debug('Finished converted')
-            self.save_dense_label(res_pc, dic['lidar_file_name'])
+
+            path = osp.join(self.cfg.save_dir, dic['lidar_file_name'] + '.npy')
+            os.makedirs(osp.split(path)[0], exist_ok=True)
+            np.save(path, res_pc)
+            logger.info(f"[{self.frame_cnt}] token: {dic['lidar_tk']}, used:{time.time()-st_time:.0f}, saved at: {path}")
+            self.frame_cnt += 1
 
     def run(self):
         for scene_idx in range(*self.cfg.scene_range):
@@ -330,10 +333,12 @@ if __name__ == '__main__':
 
     cfg.labels.nusc_name2id = {v: k for k, v in cfg.labels.nusc_id2name.items()}
 
+    logger.add(cfg.log_path, level=cfg.log_level)
+
     _nusc = NuScenes(dataroot=cfg.data_root, version=cfg.version)
 
     # debug
-    # occ_label = OccLabel(_nusc, cfg, idx=0)
+    # occ_label = OccLabel(_nusc, cfg, idx=2)
     # occ_label.restore_occ_dense_label()
 
     # run

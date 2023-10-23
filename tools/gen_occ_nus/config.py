@@ -1,15 +1,23 @@
-
 cfg = {
     'data_root': '/data1/nuscenes',
-    'version': 'v1.0-mini',
+    'version': 'v1.0-trainval',
     'nusc_val_fpath': 'tools/gen_occ_nus/nuscenes_val_list.txt',
     'split': 'train',
     'save_dir': './dense_occ',
     'log_path': './dense_occ.log',
+    'log_level': 'INFO',
     'scene_range': [0, 850],
+
+    # Surround Setting
     'voxel_size': [0.5, 0.5, 0.5],
     'pc_range': [-50, -50, -5, 50, 50, 3],
     'occ_size': [200, 200, 16],
+
+    # Custom Setting
+    # 'voxel_size': [0.15, 0.15, 1],
+    # 'pc_range': [-15, -30, -10, 15, 30, 10],
+    # 'occ_size': [200, 400, 20],
+
     'self_range': [3.0, 3.0, 3.0],
     'mesh': {
         'depth': 10,
