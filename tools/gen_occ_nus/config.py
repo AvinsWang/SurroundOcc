@@ -22,7 +22,9 @@ cfg = {
     'mesh': {
         'depth': 10,
         'min_density': 0.1,
-        'n_threads': -1,
+        # Notice: this will affect poisson reconstruction efficent,
+        # -1 is a disaster
+        'n_threads': 8,
         'downsample': False,
         'max_nn': 20,
     },

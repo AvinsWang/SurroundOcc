@@ -57,13 +57,13 @@ def get_intrinsic_matrix(intrinsic, size=4):
     return M
 
 
-def fill_empty_holes(pc, is_calc_normals=False, radius=0.1, max_nn=30,
+def fill_empty_holes(pc, is_calc_normals=False, max_nn=30,
                      depth=10, n_threads=-1, min_density=0.1):
     pcd = o3d.geometry.PointCloud()
     pcd.points = o3d.utility.Vector3dVector(pc[:, :3])
 
     if is_calc_normals:
-        _param = o3d.geometry.KDTreeSearchParamHybrid(radius=radius, max_nn=max_nn)
+        _param = o3d.geometry.KDTreeSearchParamKNN(max_nn)
         pcd.estimate_normals(search_param=_param)
         pcd.orient_normals_towards_camera_location()    # 作用?
 
@@ -71,7 +71,10 @@ def fill_empty_holes(pc, is_calc_normals=False, radius=0.1, max_nn=30,
         pcd, depth, n_threads=n_threads)
 
     if min_density:
-        mesh.remove_vertices_by_mask(densities < np.quantile(densities, min_density))
+        vertices_to_remove = densities < np.quantile(densities, min_density)
+        mesh.remove_vertices_by_mask(vertices_to_remove)
+    mesh.compute_vertex_normals()
+
     return np.asarray(mesh.vertices, dtype=float)
 
 

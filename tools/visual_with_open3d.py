@@ -1,6 +1,7 @@
 import numpy as np
 import open3d as o3d
 from addict import Addict
+from loguru import logger
 
 
 colors_map = [
@@ -27,7 +28,6 @@ colors_map = [
     [0, 191, 255, 255],
     # [175,   0,  75, 255], # other_flat           dark red
 ]
-
 
 
 class VoxelBox:
@@ -66,7 +66,7 @@ class VoxelBox:
             voxel_size (np.array): [x, y, z] size
         """
         pc_num = len(pc)
-        offset = cls._vertice * voxel_size
+        offset = cls._vertice * (voxel_size / 2.)
         offset = np.tile(offset[None, ...], (pc_num, 1, 1))
         vertice = offset + pc[:, :3][:, None, :]
 
@@ -105,6 +105,7 @@ class RenderPointCloud:
         self.vis = self.init_vis()
         if self.cfg.is_voxel:
             self.voxel_size = np.array(self.cfg.voxel_size)
+        logger.debug(f"Loaded pcd shape: {self.pc.shape}")
 
     def init_vis(self):
         vis = o3d.visualization.VisualizerWithKeyCallback()
@@ -116,17 +117,19 @@ class RenderPointCloud:
     def get_pc_voxel_box(self, pc):
         vertice, edge = VoxelBox.get_pc_voxel_box(pc, self.voxel_size)
         line_set = o3d.geometry.LineSet()
-        line_set.points = o3d.open3d.utility.Vector3dVector(vertice.reshape((-1, 3)))
-        line_set.lines = o3d.open3d.utility.Vector2iVector(edge.reshape((-1, 2)))
+        line_set.points = o3d.open3d.utility.Vector3dVector(
+            vertice.reshape((-1, 3)))
+        line_set.lines = o3d.open3d.utility.Vector2iVector(
+            edge.reshape((-1, 2)))
         line_set.paint_uniform_color((0, 0, 0))
         return line_set
 
     def simple_render(self):
         label = self.pc[:, 3]
-        assert label.max() < len(colors_map)
+        assert label.max() < len(self.cfg.colors_map)
 
-        colors = colors_map[label.astype(int)]
-        print('categories num', len(np.unique(label)))
+        colors = self.cfg.colors_map[label.astype(int)]
+        print('类别数量', len(np.unique(label)))
         pcd = o3d.geometry.PointCloud()
         pcd.points = o3d.utility.Vector3dVector(self.pc[:, :3])
         # pcd.colors = o3d.utility.Vector3dVector(colors[:, :3])
@@ -135,7 +138,7 @@ class RenderPointCloud:
 
     def render(self, is_simple=False):
         label = self.pc[:, 3]
-        assert label.max() < len(colors_map)
+        assert label.max() < len(self.cfg.colors_map), f"{label.max()}"
 
         colors = self.cfg.colors_map[label.astype(int)]
 
@@ -149,7 +152,8 @@ class RenderPointCloud:
         self.vis.add_geometry(mesh_frame)
 
         # notice: only support CUBE! so, only can give A size for voxel_size
-        vox_grid = o3d.geometry.VoxelGrid.create_from_point_cloud(pcd, voxel_size=self.voxel_size[0]*2)
+        vox_grid = o3d.geometry.VoxelGrid.create_from_point_cloud(
+            pcd,voxel_size=self.voxel_size[0])
         self.vis.add_geometry(vox_grid)
 
         line_set = self.get_pc_voxel_box(self.pc)

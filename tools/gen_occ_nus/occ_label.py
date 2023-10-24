@@ -314,7 +314,8 @@ class OccLabel:
             path = osp.join(self.cfg.save_dir, dic['lidar_file_name'] + '.npy')
             os.makedirs(osp.split(path)[0], exist_ok=True)
             np.save(path, res_pc)
-            logger.info(f"[{self.frame_cnt}] token: {dic['lidar_tk']}, used:{time.time()-st_time:.0f}, saved at: {path}")
+            logger.info(f"[{self.frame_cnt}] token: {dic['lidar_tk']} " \
+                        f"used:{time.time()-st_time:.0f}, saved at: {path}")
             self.frame_cnt += 1
 
     def run(self):
@@ -338,7 +339,7 @@ if __name__ == '__main__':
     _nusc = NuScenes(dataroot=cfg.data_root, version=cfg.version)
 
     # debug
-    # occ_label = OccLabel(_nusc, cfg, idx=2)
+    # occ_label = OccLabel(_nusc, cfg, idx=0)
     # occ_label.restore_occ_dense_label()
 
     # run
