@@ -1,17 +1,16 @@
 cfg = {
     'data_root': '/data1/nuscenes',
-    'version': 'v1.0-trainval',
+    'version': 'v1.0-mini',
     'nusc_val_fpath': 'tools/gen_occ_nus/nuscenes_val_list.txt',
     'split': 'train',
-    'save_dir': './dense_occ',
-    'log_path': './dense_occ.log',
-    'log_level': 'INFO',
+    'save_dir': './__occ/dense_occ_debug',
+    'log_level': 'DEBUG',
     'scene_range': [0, 850],
 
     # Surround Setting
     'voxel_size': [0.5, 0.5, 0.5],
-    'pc_range': [-50, -50, -5, 50, 50, 3],
-    'occ_size': [200, 200, 16],
+    'pc_range': [-50, -50, -10, 50, 50, 10],
+    'occ_size': [200, 200, 40],
 
     # Custom Setting
     # 'voxel_size': [0.15, 0.15, 1],
@@ -22,14 +21,35 @@ cfg = {
     'mesh': {
         'depth': 10,
         'min_density': 0.1,
-        # Notice: this will affect poisson reconstruction efficent,
-        # -1 is a disaster
+        # Notice: poisson reconstruction threads, -1 is a disaster
         'n_threads': 8,
         'downsample': False,
         'max_nn': 20,
     },
-}
 
+    # where to load seg label, 'lidar_seg' or 'image_seg', if 'image_seg'
+    # means use semantic segmentation to get seg mask, then project lidar
+    # point cloud to image to get label of each point cloud; Same to lidar
+    # seg label, image seg label only loaded on key frame
+    'seg_label': 'image_seg',
+
+    # >>> setting for 'image_seg'
+    # dir to save seg mask, e.g. seg_root/image_name.png
+    'seg_root': './data/nusc_seg/panoptic_seg_merge',
+    'seg_vis_root': './data/nusc_seg/panoptic_seg_merge_vis',
+    'cam_name_dic': dict(CAM_FRONT_LEFT=0, CAM_FRONT=1, CAM_FRONT_RIGHT=2,
+                         CAM_BACK_LEFT=3, CAM_BACK=4, CAM_BACK_RIGHT=5),
+    'ori_img_h': 900,
+    'ori_img_w': 1600,
+    # Only load key frame seg label
+    'is_only_key_frame': True,
+    'seg_default_cls': -1,
+    'is_assign_empty': True,
+    'is_save_vis_fig': True,
+    'vis_fig_size': (28, 11),
+    'is_voxel_MA': True,
+    # <<< setting for 'image_seg'
+}
 
 labels = dict(
     nusc_id2name={
@@ -84,6 +104,7 @@ labels = dict(
         14: 'terrain',
         15: 'manmade',
         16: 'vegetation',
+        17: 'sky'
     },
     nusc_id2occ_id={
         1: 0,
@@ -118,5 +139,44 @@ labels = dict(
         27: 14,
         28: 15,
         30: 16,
+    },
+    seg_id2name={
+        0: 'background',
+        1: 'road',
+        2: 'tree',
+        3: 'sky',
+        4: 'person',
+        5: 'car',
+        6: 'truck',
+        7: 'bus',
+        8: 'tricycle_and_trailer',
+        9: 'motorcycle',
+        10: 'bicycle',
+        11: 'fence',
+        12: 'cone',
+        13: 'pole',
+        14: 'static',
+        15: 'animal',
+        16: 'baby-chair'
+    },
+    seg_id2occ_id={
+        0: 12,
+        1: 11,
+        2: 16,
+        3: -1,      # 天空, 没有意义
+        4: 7,
+        5: 4,
+        6: 10,
+        7: 3,
+        8: 9,
+        9: 6,
+        10: 2,
+        11: 1,
+        12: 8,
+        13: 8,
+        14: 15,
+        15: 5,      # for display
+        16: 2,
+        -1: -1,     # default cls
     }
 )

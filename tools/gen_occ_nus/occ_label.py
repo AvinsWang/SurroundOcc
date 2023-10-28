@@ -1,28 +1,56 @@
 import os
+import cv2
 import sys
 import time
 import torch
 import numpy as np
+from PIL import Image
 import os.path as osp
 from loguru import logger
+import matplotlib.pyplot as plt
 from scipy.spatial.transform import Rotation
 
+from numpy import vectorize as vecF
+from ibasis import idraw
+from ibasis import inusc
+from ibasis import ibasisF as fn
+
 sys.path.append(osp.join(osp.dirname(__file__), '../..'))
-from tools.gen_occ_nus import utils
+from tools.gen_occ_nus.utils import (
+    get_3d_project_matrix, get_intrinsic_matrix, pc_project, proj_pc2img,
+    pts_in_bbox, get_lidar2cam, assign_empty_pcd, get_range_mask,
+    fill_empty_holes, get_dense_seg_label, voxelize, voxel_MA
+)
 
-
-pj_M = utils.get_3d_project_matrix
-pj_K = utils.get_intrinsic_matrix
-pc_project = utils.pc_project
+pj_M = get_3d_project_matrix
+pj_K = get_intrinsic_matrix
 
 
 class OccLabel:
+    """ Generate dense Occ label
+
+    1. split static & moving objs (pcd, pcd with seg);
+    2. merge static, moving objs in two sets, respectively;
+    3. restore current frame dense pcd from merged static scenes;
+       restore current frame moving objs from merged moving objs;
+       restore current frame semantic labels from merged seg labels;
+    4. mesh reconstruction to fill empty holes;
+    5. KNN assign dense pcd from semantic labels;
+    6. convert to voxel grid
+    """
+
     def __init__(self, nusc, cfg, idx=None) -> None:
         self.nusc = nusc
         self.idx = idx
         self.cfg = cfg
-        # # converted frame count
-        self.frame_cnt = 0
+        self.frame_cnt = 0  # resotore frame count
+        self.cfg.nusc_id2occ_id_f = vecF(cfg.labels.nusc_id2occ_id.__getitem__)
+        self.cfg.seg_id2occ_id_f = vecF(cfg.labels.seg_id2occ_id.__getitem__)
+        self.cfg.labels.nusc_name2id = {v: k for k, v in
+                                        cfg.labels.nusc_id2name.items()}
+        self.cfg.save_lbl_dir = osp.join(cfg.save_dir, 'occ_label')
+        self.cfg.save_vis_dir = osp.join(cfg.save_dir, 'vis')
+        self.buf = Addict()
 
     def load_val_lis(self):
         _val = list()
@@ -43,10 +71,58 @@ class OccLabel:
             cur_tk = dic['next']
         return sensor_lis
 
-    def load_lidar_seg(self, token):
+    def load_lidar_seg(self, tk):
         path = osp.join(self.cfg['data_root'],
-                        self.nusc.get('lidarseg', token)['filename'])
+                        self.nusc.get('lidarseg', tk)['filename'])
         return np.fromfile(path, dtype=np.uint8)
+
+    def load_image_seg(self, pcd, sample_tk):
+        cam_info_dic = get_lidar2cam(self.nusc, sample_tk, self.cfg.cam_name_dic)
+
+        index = np.array([i for i in range(len(pcd))])
+        pcd = np.concatenate([pcd[:, :3], index.reshape(-1, 1)], axis=1)
+
+        pcd_seg = pcd.copy()
+        pcd_seg[:, 3] = self.cfg.seg_default_cls
+
+        img_dic = dict()
+
+        for name, dic in cam_info_dic.items():
+            logger.debug(f"Load {self.frame_idx} {name} {dic['img_tk']} " \
+                         f"img and convert labels from seg")
+            stem = osp.splitext(osp.split(dic['img_name'])[-1])[0]
+            mask_path = osp.join(self.cfg.seg_root, f'{stem}.png')
+            mask_cls = np.array(Image.open(mask_path), dtype=np.uint8)
+
+            # if show point cloud on image
+            img_pts = proj_pc2img(pcd, dic['lidar2cam'], dic['intrinsic'],
+                                  self.cfg.ori_img_h, self.cfg.ori_img_w)
+            img_pts = img_pts.astype(np.int32)  # max: 2^32 - 1
+
+            cls_lbl = mask_cls[img_pts[:, 1], img_pts[:, 0]]
+            cls_lbl = self.cfg.seg_id2occ_id_f(cls_lbl)
+            pcd_seg[img_pts[:, 3], 3] = cls_lbl
+
+            if self.cfg.is_save_vis_fig:
+                mask_vis_path = osp.join(self.cfg.seg_vis_root, f'{stem}.jpg')
+                img_cv = cv2.imread(mask_vis_path)
+                img_cv = cv2.cvtColor(img_cv, cv2.COLOR_RGB2BGR)
+
+                img_cv = idraw.draw_pts_as_dot_mask(img_cv, img_pts[:, :2],
+                                                    color=(0, 0, 255), radius=3)
+                img_cv = cv2.cvtColor(img_cv, cv2.COLOR_BGR2RGB)
+                img_dic[name] = img_cv
+
+        if self.cfg.is_save_vis_fig:
+            inusc.show_nusc_imgs_dic(img_dic, mode='image', figsize=self.cfg.vis_fig_size)
+            path = osp.join(self.cfg.save_vis_dir, f'{fn.get_stem(self.buf.lidar_name)}.jpg')
+            fn.make_path_dir(path)
+            plt.savefig(path)
+
+        logger.debug(f"{self.frame_idx} converted cate id " \
+                     f"{np.unique(pcd_seg[:, 3]).astype(int).tolist()}")
+
+        return pcd_seg
 
     def get_sensor2glb(self, lidar_or_cam_tk=None, dic=None, is_cam=False):
         if lidar_or_cam_tk is not None:
@@ -90,13 +166,14 @@ class OccLabel:
         gt_bbox_3d = np.stack(gt_bbox_3d, axis=0).astype(np.float32)
         return gt_bbox_3d, obj_tk_lis, obj_cate_lis, obj_cate_id_lis
 
-    def split_single_lidar_frame(self, lidar_tk, glb2lidar_ref_M):
+    def split_a_lidar_frame(self, lidar_tk, glb2lidar_ref_M, idx=None):
         """ Split static scene and moving object in sigle one lidar frame
 
         Args:
             lidar_tk (str): nusc lidar token.
             glb2lidar_ref_M (np.array): 4x4 rotate matrix for converting lidar
                 pcd to reference coordinate, e.g. sampel 0 pose.
+            idx (int): lidar index of the scene, to log info
 
         Returns:
             # results only in this lidar frame
@@ -112,21 +189,25 @@ class OccLabel:
                     x, y, z is minmal coord of this bbox; w, l, h length of
                     x, y, z axis; yaw(rad) bbox direction, y-axis positive
                     direction is 0
-                lidar2glb (numpy.ndarray): lidar -> global project matrix, [4, 4]
+                lidar2glb (numpy.ndarray): lidar -> global project matrix, 4x4
                 lidar_tk (str): lidar token
                 is_key_frame (bool): ~
                 lidar_file_name (str): e.g. 'xxx.bin.pcd'
         """
+        self.frame_idx = idx
         lidar_dic = self.nusc.get('sample_data', lidar_tk)
+        lidar_path = osp.join(self.cfg.data_root, lidar_dic['filename'])
+        self.buf.lidar_name = lidar_dic['filename']
+        logger.debug(f"Load {self.frame_idx} Lidar {lidar_tk} infos")
+
         lidar_path, boxes, _ = self.nusc.get_sample_data(lidar_dic['token'])
 
         gt_bbox_3d, obj_tk_lis, obj_cate_lis, obj_cate_id_lis = self.get_bboxes(boxes)
 
-        lidar_path = osp.join(self.cfg.data_root, lidar_dic['filename'])
         pc = np.fromfile(lidar_path, dtype=np.float32).reshape(-1, 5)[..., :4]
 
         # got mask of points which is in box [1 N_pt N_box]
-        pts_in_boxes = utils.pts_in_bbox(pc, gt_bbox_3d)
+        pts_in_boxes = pts_in_bbox(pc, gt_bbox_3d)
         # * cut out movable object points and masks
         # 取出每个bbox中的点
         obj_pts_lis = [pc[pts_in_boxes[0][:, i].bool()]
@@ -139,6 +220,7 @@ class OccLabel:
             (np.abs(pc[:, 1]) > self.cfg.self_range[1]) |
             (np.abs(pc[:, 2]) > self.cfg.self_range[2])
         )
+
         static_pts_mask = static_pts_mask & self_mask
         static_pc = pc[static_pts_mask]
 
@@ -148,14 +230,28 @@ class OccLabel:
         lidar2lidar_ref_M = glb2lidar_ref_M @ lidar2glb_M
         static_pc_ref = pc_project(static_pc, lidar2lidar_ref_M)
 
-        if lidar_dic['is_key_frame']:
-            seg_lbl = self.load_lidar_seg(lidar_dic['token']).reshape(-1, 1)
-            seg_lbl = np.vectorize(self.cfg.labels.nusc_id2occ_id.__getitem__)(seg_lbl)
-            pc_seg = np.concatenate([pc[:, :3], seg_lbl], axis=1)
+        pc_seg = None
+        static_pc_seg_ref = None
+        if self.cfg.seg_label == 'lidar_seg':
+            if lidar_dic['is_key_frame']:
+                seg_lbl = self.load_lidar_seg(lidar_dic['token']).reshape(-1, 1)
+                seg_lbl = self.cfg.nusc_id2occ_id_f(seg_lbl)
+                pc_seg = np.concatenate([pc[:, :3], seg_lbl], axis=1)
+        elif self.cfg.seg_label == 'image_seg':
+            if ((not self.cfg.is_only_key_frame) or (
+                self.cfg.is_only_key_frame and lidar_dic['is_key_frame'])):
+                pc_seg = self.load_image_seg(pc, lidar_dic['sample_token'])
+
+        if pc_seg is not None:
             pc_seg = pc_seg[static_pts_mask]
             static_pc_seg_ref = pc_project(pc_seg, lidar2lidar_ref_M)
-        else:
-            static_pc_seg_ref = None
+
+        sample = self.nusc.get('sample', lidar_dic['sample_token'])
+        cam_file_path_lis = list()
+        for sensor_name, sensor_tk in sample['data'].items():
+            if sensor_name.startswith('CAM'):
+                path = self.nusc.get('sample_data', sensor_tk)['filename']
+                cam_file_path_lis.append(path)
 
         return dict(
             obj_tk_lis=obj_tk_lis,
@@ -169,6 +265,7 @@ class OccLabel:
             lidar_tk=lidar_dic['token'],
             is_key_frame=lidar_dic['is_key_frame'],
             lidar_file_name=osp.split(lidar_path)[-1],
+            cam_file_path_lis=cam_file_path_lis,
         )
 
     def split_scene(self):
@@ -183,12 +280,16 @@ class OccLabel:
 
         lidar02glb = self.get_sensor2glb(sensor_tk_lis[0])['sens2glb']
 
-        meta_lis = [self.split_single_lidar_frame(tk, np.linalg.inv(lidar02glb))
-                    for tk in sensor_tk_lis]
+        meta_lis = [self.split_a_lidar_frame(tk, np.linalg.inv(lidar02glb), idx)
+                    for idx, tk in enumerate(sensor_tk_lis)]
 
         static_pc_ref = np.concatenate([dic['static_pc_ref'] for dic in meta_lis])
         static_pc_seg_ref = np.concatenate([dic['static_pc_seg_ref'] for dic in
                                             meta_lis if dic['is_key_frame']])
+
+        if self.cfg.seg_label == 'image_seg' and self.cfg.is_assign_empty:
+            static_pc_seg_ref = assign_empty_pcd(static_pc_seg_ref,
+                                                 [self.cfg.seg_default_cls])
 
         # 将所有移动目标合并, 这里的合并是指将每个物体先归一化到自己的相对位置,
         # 即, 左下角为原点, 然后再将多帧中的物体点云进行叠加, 最后得到 id->obj_pts
@@ -252,7 +353,7 @@ class OccLabel:
                 obj_pts = roted_obj_pts + gt_bbox_3d[:, :3][j]
                 # 获取在bbox框内的动态物体点云
                 if len(obj_pts) > 4:
-                    pts_in_boxes = utils.pts_in_bbox(obj_pts, gt_bbox_3d[j: j + 1])
+                    pts_in_boxes = pts_in_bbox(obj_pts, gt_bbox_3d[j: j + 1])
                     obj_pts = obj_pts[pts_in_boxes[0, :, 0].bool()]
                 merge_obj_pts_lis.append(obj_pts)
                 lbl = obj_cate_id_lis[k][None, ...].repeat(len(obj_pts)).reshape(-1, 1)
@@ -267,15 +368,14 @@ class OccLabel:
         else:
             merge_seg_pc = _static_seg_pc
 
-        merge_pc, _ = utils.get_range_mask(merge_pc, range_=self.cfg.pc_range)
-        merge_pc = utils.fill_empty_holes(merge_pc, is_calc_normals=True,
-                                          max_nn=self.cfg.mesh.max_nn,
-                                          depth=self.cfg.mesh.depth,
-                                          n_threads=self.cfg.mesh.n_threads,
-                                          min_density=self.cfg.mesh.min_density
-                                          )
-        merge_pc, _ = utils.get_range_mask(merge_pc, range_=self.cfg.pc_range)
-        merge_seg_pc, _ = utils.get_range_mask(merge_seg_pc, range_=self.cfg.pc_range)
+        merge_pc, _ = get_range_mask(merge_pc, range_=self.cfg.pc_range)
+        merge_pc = fill_empty_holes(merge_pc, is_calc_normals=True,
+                                    max_nn=self.cfg.mesh.max_nn,
+                                    depth=self.cfg.mesh.depth,
+                                    n_threads=self.cfg.mesh.n_threads,
+                                    min_density=self.cfg.mesh.min_density)
+        merge_pc, _ = get_range_mask(merge_pc, range_=self.cfg.pc_range)
+        merge_seg_pc, _ = get_range_mask(merge_seg_pc, range_=self.cfg.pc_range)
 
         return merge_pc, merge_seg_pc
 
@@ -291,29 +391,25 @@ class OccLabel:
                 continue
             st_time = time.time()
             merge_pc, merge_seg_pc = self.merge_moving_objects(scene_dic, dic)
-            # voxelize
-            voxel_pc = merge_pc.copy()
-            voxel_pc = (voxel_pc - pc_range[:3]) / voxel_size
-            voxel_pc = np.floor(voxel_pc).astype(int)
-            voxel = np.zeros(self.cfg.occ_size)
-            voxel[voxel_pc[:, 0], voxel_pc[:, 1], voxel_pc[:, 2]] = 1
 
-            grid = utils.get_grid_index(voxel.shape)
-            fov_voxels = grid[voxel > 0]
+            fov_voxels = voxelize(merge_pc, pc_range, self.cfg.occ_size,
+                                  voxel_size, mode='multi')
 
             fov_voxels[:, :3] = (fov_voxels[:, :3] + voxel_size) * voxel_size
-            # 变换到到lidar坐标系
+            # -> lidar coordinate
             fov_voxels[:, :3] += pc_range[:3]
 
-            res_pc = utils.get_dense_seg_label(fov_voxels, merge_seg_pc)
-            # 变换到体素坐标系
-            res_pc[:, :3] = (res_pc[:, :3] - pc_range[:3]) / voxel_size
-            res_pc = np.floor(res_pc).astype(int)
-            logger.debug('Finished converted')
+            voxel = get_dense_seg_label(fov_voxels, merge_seg_pc)
+            # -> voxel coordinate
+            voxel[:, :3] = (voxel[:, :3] - pc_range[:3]) / voxel_size
+            voxel = np.floor(voxel).astype(int)
 
-            path = osp.join(self.cfg.save_dir, dic['lidar_file_name'] + '.npy')
+            if self.cfg.is_voxel_MA:
+                voxel = voxel_MA(voxel, self.cfg.occ_size, mode='xy8')
+
+            path = osp.join(self.cfg.save_lbl_dir, f"{dic['lidar_file_name']}.npy")
             os.makedirs(osp.split(path)[0], exist_ok=True)
-            np.save(path, res_pc)
+            np.save(path, voxel)
             logger.info(f"[{self.frame_cnt}] token: {dic['lidar_tk']} " \
                         f"used:{time.time()-st_time:.0f}, saved at: {path}")
             self.frame_cnt += 1
@@ -332,16 +428,13 @@ if __name__ == '__main__':
     config.cfg.update(labels=config.labels)
     cfg = Addict(config.cfg)
 
-    cfg.labels.nusc_name2id = {v: k for k, v in cfg.labels.nusc_id2name.items()}
-
-    logger.add(cfg.log_path, level=cfg.log_level)
-
+    logger.add(osp.join(cfg.save_dir, 'occ_label.log'), level=cfg.log_level)
     _nusc = NuScenes(dataroot=cfg.data_root, version=cfg.version)
 
     # debug
-    # occ_label = OccLabel(_nusc, cfg, idx=0)
-    # occ_label.restore_occ_dense_label()
+    occ_label = OccLabel(_nusc, cfg, idx=0)
+    occ_label.restore_occ_dense_label()
 
     # run
-    occ_label = OccLabel(_nusc, cfg)
-    occ_label.run()
+    # occ_label = OccLabel(_nusc, cfg)
+    # occ_label.run()
