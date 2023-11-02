@@ -1,16 +1,16 @@
 cfg = {
     'data_root': '/data1/nuscenes',
-    'version': 'v1.0-mini',
+    'version': 'v1.0-trainval',
     'nusc_val_fpath': 'tools/gen_occ_nus/nuscenes_val_list.txt',
     'split': 'train',
-    'save_dir': './__occ/dense_occ_debug',
+    'save_dir': './__occ/dense_occ_debug_all',
     'log_level': 'DEBUG',
     'scene_range': [0, 850],
 
     # Surround Setting
     'voxel_size': [0.5, 0.5, 0.5],
-    'pc_range': [-50, -50, -10, 50, 50, 10],
-    'occ_size': [200, 200, 40],
+    'pc_range': [-50, -50, -5, 50, 50, 3],
+    'occ_size': [200, 200, 16],
 
     # Custom Setting
     # 'voxel_size': [0.15, 0.15, 1],
@@ -45,7 +45,7 @@ cfg = {
     'is_only_key_frame': True,
     'seg_default_cls': -1,
     'is_assign_empty': True,
-    'is_save_vis_fig': True,
+    'is_save_vis_fig': False,
     'vis_fig_size': (28, 11),
     'is_voxel_MA': True,
     # <<< setting for 'image_seg'

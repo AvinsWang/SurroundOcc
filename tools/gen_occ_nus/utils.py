@@ -1,3 +1,4 @@
+import os
 import torch
 import numpy as np
 import open3d as o3d
@@ -5,7 +6,7 @@ from numpy.linalg import inv
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
 from pyquaternion import Quaternion
-from mmcv.ops.points_in_boxes import points_in_boxes_cpu
+from mmcv.ops.points_in_boxes import points_in_boxes_cpu, points_in_boxes_all
 import chamfer
 
 
@@ -14,7 +15,9 @@ def pc_project(pc, M):
 
     Args:
         pc (np.array): Nx4
-        M (np.array): 4x4 project matrix
+        M (np.array): 4x4 project matrix, e.g. or it's inv
+            | R T |
+            | 0 1 |
     """
     labels = pc[:, 3]
     _pc = pc.copy()
@@ -201,7 +204,7 @@ def get_grid_index(shape):
     return vv
 
 
-def get_dense_seg_label(dense_pc, seg_pc):
+def get_dense_seg_label(dense_pc, seg_pc, device='cuda:0'):
     """ Assign label to dense_pc from seg_pc
 
     Args:
@@ -211,17 +214,20 @@ def get_dense_seg_label(dense_pc, seg_pc):
     Returns:
         np.array: Nx4
     """
-    x = torch.from_numpy(dense_pc).cuda().float()[None, ...]
-    y = torch.from_numpy(seg_pc[:, :3]).cuda().float()[None, ...]
+    x = torch.from_numpy(dense_pc).float()[None, ...]
+    y = torch.from_numpy(seg_pc[:, :3]).float()[None, ...]
+    x = x.to(device)
+    y = y.to(device)
     _, _, idx, _ = chamfer.forward(x, y)
-    idx = idx[0].cpu().numpy().astype(int)
+    idx = idx[0].cpu().detach().numpy().astype(int)
 
     dense_seg_pc = seg_pc[:, 3][idx]
     res = np.concatenate([dense_pc, dense_seg_pc[..., None]], axis=1)
+    torch.cuda.empty_cache()
     return res
 
 
-def assign_empty_pcd(pcd, cls_id_lis):
+def assign_empty_pcd(pcd, cls_id_lis, device='cuda:0'):
     """ Assign specify class id with nearset class
 
     Args:
@@ -239,7 +245,7 @@ def assign_empty_pcd(pcd, cls_id_lis):
     if mask_empty.sum() > 0 and mask_empty.sum() < len(pcd):
         empty_pcd = pcd[mask_empty]
         seg_pcd = pcd[~mask_empty]
-        labeled_pcd = get_dense_seg_label(empty_pcd[:, :3], seg_pcd)
+        labeled_pcd = get_dense_seg_label(empty_pcd[:, :3], seg_pcd, device)
         pcd = np.concatenate([labeled_pcd, seg_pcd], axis=0)
     return pcd
 
@@ -285,10 +291,17 @@ def get_range_mask(pc, range_=None, is_mask=True):
     return pc, mask
 
 
-def pts_in_bbox(pc, bbox):
+def pts_in_bbox(pc, bbox, device='cuda:0'):
     # pc: [_, 4], bbox: [_, 7], return [B, N_pt, ]
-    return points_in_boxes_cpu(torch.from_numpy(pc[:, :3][None, ...]),
-                               torch.from_numpy(bbox[None, ...]))
+    _pc = torch.from_numpy(pc[:, :3][None, ...]).to(device).float()
+    _bbox = torch.from_numpy(bbox[None, ...]).to(device).float()
+    _res = points_in_boxes_all(_pc, _bbox).to('cpu')
+
+    # cpu
+    # points_in_boxes_cpu(torch.from_numpy(pc[:, :3][None, ...]),
+    #                            torch.from_numpy(bbox[None, ...]))
+
+    return _res
 
 
 class NeighbourIndex:
