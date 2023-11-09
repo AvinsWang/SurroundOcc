@@ -31,7 +31,7 @@ colors = np.array(
     ]
 ).astype(np.uint8)
 
-#mlab.options.offscreen = True
+# mlab.options.offscreen = True
 
 voxel_size = 0.5
 pc_range = [-50, -50,  -5, 50, 50, 3]

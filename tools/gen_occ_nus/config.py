@@ -2,7 +2,7 @@ cfg = {
     'data_root': '/data1/nuscenes',
     'version': 'v1.0-trainval',
     'nusc_val_fpath': 'tools/gen_occ_nus/nuscenes_val_list.txt',
-    'split': 'train',
+    'split': 'all',
     'save_dir': './__occ/dense_occ_debug_all',
     'log_level': 'DEBUG',
     'scene_range': [0, 850],

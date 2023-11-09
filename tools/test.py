@@ -16,13 +16,18 @@ from mmcv.runner import (get_dist_info, init_dist, load_checkpoint,
 
 from mmdet3d.apis import single_gpu_test
 from mmdet3d.datasets import build_dataset
-from projects.mmdet3d_plugin.datasets.builder import build_dataloader
 from mmdet3d.models import build_model
 from mmdet.apis import set_random_seed
-from projects.mmdet3d_plugin.surroundocc.apis.test import custom_multi_gpu_test
 from mmdet.datasets import replace_ImageToTensor
 import time
 import os.path as osp
+
+import sys
+t = os.path.join(os.path.dirname(__file__), '..')
+sys.path.append(t)
+
+from projects.mmdet3d_plugin.datasets.builder import build_dataloader
+from projects.mmdet3d_plugin.surroundocc.apis.test import custom_multi_gpu_test
 
 
 def parse_args():
@@ -226,9 +231,9 @@ def main():
         model.PALETTE = dataset.PALETTE
 
     if not distributed:
-        assert False
-        # model = MMDataParallel(model, device_ids=[0])
-        # outputs = single_gpu_test(model, data_loader, args.show, args.show_dir)
+        # assert False
+        model = MMDataParallel(model, device_ids=[0])
+        outputs = single_gpu_test(model, data_loader, args.show, args.show_dir)
     else:
         model = MMDistributedDataParallel(
             model.cuda(),
@@ -236,7 +241,7 @@ def main():
             broadcast_buffers=False)
         outputs = custom_multi_gpu_test(model, data_loader, args.tmpdir,
                                         args.gpu_collect, args.is_vis)
-    
+
     if args.is_vis:
         return
 

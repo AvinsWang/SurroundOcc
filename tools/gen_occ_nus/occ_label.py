@@ -55,7 +55,7 @@ class OccLabel:
         self.cfg.seg_id2occ_id_f = vecF(cfg.labels.seg_id2occ_id.__getitem__)
         self.cfg.labels.nusc_name2id = {v: k for k, v in
                                         cfg.labels.nusc_id2name.items()}
-        self.cfg.save_lbl_dir = osp.join(cfg.save_dir, 'occ_label')
+        self.cfg.save_lbl_dir = osp.join(cfg.save_dir, 'samples')
         self.cfg.save_vis_dir = osp.join(cfg.save_dir, 'vis')
         self.device = 'cuda:0'
         self.buf = Addict()
@@ -171,8 +171,8 @@ class OccLabel:
             # 猜测, yaw 0 度为x轴方向, +90将 0 度转为y轴方向
             yaw = box.orientation.yaw_pitch_roll[0][None, ...] + np.pi / 2
             gt_bbox_3d.append(np.concatenate([box.center, box.wlh, yaw]))
-
-        gt_bbox_3d = np.stack(gt_bbox_3d, axis=0).astype(np.float32)
+        if len(gt_bbox_3d) > 0:
+            gt_bbox_3d = np.stack(gt_bbox_3d, axis=0).astype(np.float32)
         return gt_bbox_3d, obj_tk_lis, obj_cate_lis, obj_cate_id_lis
 
     def split_a_lidar_frame(self, lidar_tk, glb2lidar_ref_M, idx=None):
@@ -215,20 +215,25 @@ class OccLabel:
 
         pc = np.fromfile(lidar_path, dtype=np.float32).reshape(-1, 5)[..., :4]
 
-        # got mask of points which is in box [1 N_pt N_box]
-        pts_in_boxes = pts_in_bbox(pc, gt_bbox_3d, self.device)
-        # * cut out movable object points and masks
-        # 取出每个bbox中的点
-        obj_pts_lis = [pc[pts_in_boxes[0][:, i].bool()]
-                       for i in range(pts_in_boxes.shape[-1])]
-        # mask for point which is not in any box
-        static_pts_mask = ~torch.sum(pts_in_boxes, dim=-1).bool()[0]
+        if len(gt_bbox_3d) > 0:
+            # got mask of points which is in box [1 N_pt N_box]
+            pts_in_boxes = pts_in_bbox(pc, gt_bbox_3d, self.device)
+            # * cut out movable object points and masks
+            # 取出每个bbox中的点
+            obj_pts_lis = [pc[pts_in_boxes[0][:, i].bool()]
+                        for i in range(pts_in_boxes.shape[-1])]
+            # mask for point which is not in any box
+            static_pts_mask = ~torch.sum(pts_in_boxes, dim=-1).bool()[0]
+            static_pts_mask = static_pts_mask.detach().numpy()
+        else:
+            obj_pts_lis = list()
+            static_pts_mask = np.ones(len(pc)).astype(int)
         # self car mask
         self_mask = torch.from_numpy(
             (np.abs(pc[:, 0]) > self.cfg.self_range[0]) |
             (np.abs(pc[:, 1]) > self.cfg.self_range[1]) |
             (np.abs(pc[:, 2]) > self.cfg.self_range[2])
-        )
+        ).numpy()
 
         static_pts_mask = static_pts_mask & self_mask
         static_pc = pc[static_pts_mask]
@@ -470,6 +475,7 @@ if __name__ == '__main__':
     is_finished = check_finised(log_path)
     if not is_finished:
         logger.add(log_path, level=cfg.log_level)
+        logger.info(f"Starting {args.scene_idx}")
         _nusc = NuScenes(dataroot=cfg.data_root, version=cfg.version)
 
         # one scene

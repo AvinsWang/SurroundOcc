@@ -172,19 +172,20 @@ class SurroundOcc(MVXTwoStageDetector):
         if type(pred_occ) == list:
             pred_occ = pred_occ[-1]
         
+        # if self.use_semantic:
+        #     class_num = pred_occ.shape[1]
+        #     _, pred_occ = torch.max(torch.softmax(pred_occ, dim=1), dim=1)
+        #     eval_results = evaluation_semantic(pred_occ, gt_occ, img_metas[0], class_num)
+
+        # else:
+        #     pred_occ = torch.sigmoid(pred_occ[:, 0])
+        #     eval_results = evaluation_reconstruction(pred_occ, gt_occ, img_metas[0])
+            
         if self.is_vis:
             self.generate_output(pred_occ, img_metas)
-            return pred_occ.shape[0]
 
-        if self.use_semantic:
-            class_num = pred_occ.shape[1]
-            _, pred_occ = torch.max(torch.softmax(pred_occ, dim=1), dim=1)
-            eval_results = evaluation_semantic(pred_occ, gt_occ, img_metas[0], class_num)
-
-        else:
-            pred_occ = torch.sigmoid(pred_occ[:, 0])
-            eval_results = evaluation_reconstruction(pred_occ, gt_occ, img_metas[0])
-        return {'evaluation': eval_results}
+        # return {'evaluation': eval_results, 'occ_pred': pred_occ[-1]}
+        return {'occ_pred': pred_occ[-1]}
         
 
 
@@ -258,6 +259,8 @@ class SurroundOcc(MVXTwoStageDetector):
                 vertices = np.concatenate([vertices, semantics[:, None]], axis=-1)
     
             save_dir = os.path.join('visual_dir', img_metas[i]['occ_path'].replace('.npy', '').split('/')[-1])
+            if os.path.exists(save_dir):
+                continue
             os.makedirs(save_dir, exist_ok=True)
 
 

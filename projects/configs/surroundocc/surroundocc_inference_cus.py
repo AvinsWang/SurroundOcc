@@ -8,18 +8,17 @@ plugin_dir = 'projects/mmdet3d_plugin/'
 
 # If point cloud range is changed, the models should also change their point
 # cloud range accordingly
-point_cloud_range = [-50.0, -50.0, -5.0, 50.0, 50.0, 3.0]
-occ_size = [200, 400, 16]
+point_cloud_range = [-50, -50, -5.0, 50, 50, 3.0]
+occ_size = [200, 200, 16]
 use_semantic = True
 
 
 img_norm_cfg = dict(
     mean=[103.530, 116.280, 123.675], std=[1.0, 1.0, 1.0], to_rgb=False)
 
-class_names = ['barrier', 'bicycle', 'bus', 'car', 'construction_vehicle',
-               'motorcycle', 'pedestrian', 'traffic_cone', 'trailer', 'truck',
-               'driveable_surface', 'other_flat', 'sidewalk', 'terrain',
-               'manmade', 'vegetation']
+class_names =  ['barrier','bicycle', 'bus', 'car', 'construction_vehicle', 'motorcycle',
+                'pedestrian', 'traffic_cone', 'trailer', 'truck', 'driveable_surface',
+                'other_flat', 'sidewalk', 'terrain', 'manmade','vegetation']
 
 input_modality = dict(
     use_lidar=False,
@@ -40,6 +39,7 @@ model = dict(
     type='SurroundOcc',
     use_grid_mask=True,
     use_semantic=use_semantic,
+    is_vis=True,
     img_backbone=dict(
        type='ResNet',
        depth=101,
@@ -113,20 +113,18 @@ file_client_args = dict(backend='disk')
 train_pipeline = [
     dict(type='LoadMultiViewImageFromFiles', to_float32=True),
     dict(type='PhotoMetricDistortionMultiViewImage'),
-    dict(type='LoadOccupancy', use_semantic=use_semantic),
     dict(type='NormalizeMultiviewImage', **img_norm_cfg),
     dict(type='PadMultiViewImage', size_divisor=32),
     dict(type='DefaultFormatBundle3D', class_names=class_names, with_label=False),
-    dict(type='CustomCollect3D', keys=['img', 'gt_occ'])
+    dict(type='CustomCollect3D', keys=['img'])
 ]
 
 test_pipeline = [
     dict(type='LoadMultiViewImageFromFiles', to_float32=True),
-    dict(type='LoadOccupancy', use_semantic=use_semantic),
     dict(type='NormalizeMultiviewImage', **img_norm_cfg),
     dict(type='PadMultiViewImage', size_divisor=32),
     dict(type='DefaultFormatBundle3D', class_names=class_names, with_label=False),
-    dict(type='CustomCollect3D', keys=['img','gt_occ'])
+    dict(type='CustomCollect3D', keys=['img'])
 ]
 
 find_unused_parameters = True
@@ -149,7 +147,7 @@ data = dict(
     val=dict(type=dataset_type,
              data_root=data_root,
              ann_file='data/nuscenes/nuscenes_infos_val.pkl',
-             pipeline=test_pipeline,  
+             pipeline=test_pipeline,
              occ_size=occ_size,
              pc_range=point_cloud_range,
              use_semantic=use_semantic,
@@ -158,7 +156,7 @@ data = dict(
     test=dict(type=dataset_type,
               data_root=data_root,
               ann_file='data/nuscenes/nuscenes_infos_val.pkl',
-              pipeline=test_pipeline, 
+              pipeline=test_pipeline,
               occ_size=occ_size,
               pc_range=point_cloud_range,
               use_semantic=use_semantic,
