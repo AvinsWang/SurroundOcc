@@ -24,7 +24,8 @@ sys.path.append(osp.join(osp.dirname(__file__), '../..'))
 from tools.gen_occ_nus.utils import (
     get_3d_project_matrix, get_intrinsic_matrix, pc_project, proj_pc2img,
     pts_in_bbox, get_lidar2cam, assign_empty_pcd, get_range_mask,
-    fill_empty_holes, get_dense_seg_label, voxelize, voxel_MA
+    fill_empty_holes, get_dense_seg_label, voxelize, voxel_MA, erode_mask,
+    filter_outlier
 )
 
 pj_M = get_3d_project_matrix
@@ -57,7 +58,7 @@ class OccLabel:
                                         cfg.labels.nusc_id2name.items()}
         self.cfg.save_lbl_dir = osp.join(cfg.save_dir, 'samples')
         self.cfg.save_vis_dir = osp.join(cfg.save_dir, 'vis')
-        self.device = 'cuda:0'
+        self.device = 'cpu'
         self.buf = Addict()
 
     def load_val_lis(self):
@@ -102,12 +103,20 @@ class OccLabel:
             stem = f"{name}/{stem}"
             mask_path = osp.join(self.cfg.seg_root, f'{stem}.png')
             mask_cls = np.array(Image.open(mask_path), dtype=np.uint8)
-
+            # mask_cls = erode_mask(mask_cls, cls=None, area=None)
             # if show point cloud on image
-            img_pts = proj_pc2img(pcd, dic['lidar2cam'], dic['intrinsic'],
-                                  self.cfg.ori_img_h, self.cfg.ori_img_w)
+            img_pts, img_pts_depth = proj_pc2img(pcd, dic['lidar2cam'],
+                                                  dic['intrinsic'],
+                                                  self.cfg.ori_img_h,
+                                                  self.cfg.ori_img_w)
             img_pts = img_pts.astype(np.int32)  # max: 2^32 - 1
 
+            # remove outlier
+            flted_pts = filter_outlier(mask_cls, img_pts_depth, dic['intrinsic'])
+            if len(flted_pts) < len(img_pts):
+                img_pts = img_pts[flted_pts[:, 3].astype(int)]
+
+            # fn.dump_pkl('test_data.pkl', [mask_cls, img_pts_depth, dic['intrinsic']])
             cls_lbl = mask_cls[img_pts[:, 1], img_pts[:, 0]]
             cls_lbl = self.cfg.seg_id2occ_id_f(cls_lbl)
             pcd_seg[img_pts[:, 3], 3] = cls_lbl
@@ -127,6 +136,18 @@ class OccLabel:
             path = osp.join(self.cfg.save_vis_dir, f'{fn.get_stem(self.buf.lidar_name)}.jpg')
             fn.make_path_dir(path)
             plt.savefig(path)
+            plt.close()
+
+        # if self.cfg.is_save_img_seg_label:
+        #     # path = osp.join(self.cfg.save_dir, 'img_seg_pcd_label',
+        #     #                 f'{fn.get_stem(self.buf.lidar_name)}.npy')
+        #     path = osp.join(self.cfg.save_dir, 'img_seg_pcd_label',
+        #                     f'{self.cfg.lidar_tk}_lidarseg.npy')
+        #     fn.make_path_dir(path)
+
+        #     pcd_seg = assign_empty_pcd(pcd_seg, [self.cfg.seg_default_cls], self.device)
+        #     # pcd_seg[pcd_seg[:, 3]==-1] = 0
+        #     np.save(path, pcd_seg)
 
         logger.debug(f"{self.frame_idx} converted cate id " \
                      f"{np.unique(pcd_seg[:, 3]).astype(int).tolist()}")
@@ -243,7 +264,7 @@ class OccLabel:
         lidar2glb_M = self.get_sensor2glb(dic=lidar_dic)['sens2glb']
         lidar2lidar_ref_M = glb2lidar_ref_M @ lidar2glb_M
         static_pc_ref = pc_project(static_pc, lidar2lidar_ref_M)
-
+        self.cfg.lidar_tk = lidar_tk
         pc_seg = None
         static_pc_seg_ref = None
         if self.cfg.seg_label == 'lidar_seg':
@@ -373,7 +394,7 @@ class OccLabel:
                 merge_obj_pts_lis.append(obj_pts)
                 lbl = obj_cate_id_lis[k][None, ...].repeat(len(obj_pts)).reshape(-1, 1)
                 merge_obj_seg_lis.append(np.concatenate([obj_pts[:, :3], lbl], axis=1))
-
+    
         if merge_obj_pts_lis:
             merge_pc = np.concatenate([_static_pc, *merge_obj_pts_lis])
         else:

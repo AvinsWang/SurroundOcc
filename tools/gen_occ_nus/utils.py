@@ -1,13 +1,17 @@
 import os
+import cv2
 import torch
 import numpy as np
 import open3d as o3d
 from numpy.linalg import inv
 import matplotlib.pyplot as plt
+from shapely.geometry import Polygon
+from shapely.affinity import scale
 import matplotlib.patches as patches
 from pyquaternion import Quaternion
 from mmcv.ops.points_in_boxes import points_in_boxes_cpu, points_in_boxes_all
 import chamfer
+from loguru import logger
 
 
 def pc_project(pc, M):
@@ -124,11 +128,11 @@ def view_points(points, intrinsic, normalize) -> np.ndarray:
 
     # Do operation in homogenous coordinates.
     points = pc_project(points, intrinsic)
-
+    points_depth = points.copy()
     if normalize:
         points[:, :3] = points[:, :3] / points[:, 2].reshape(-1, 1)
 
-    return points
+    return points, points_depth
 
 
 def proj_pc2img(pc_pts, lidar2cam, intrinsic, H, W):
@@ -148,7 +152,7 @@ def proj_pc2img(pc_pts, lidar2cam, intrinsic, H, W):
 
     depths = img_pts[:, 2]
 
-    img_pts = view_points(img_pts, intrinsic, normalize=True)
+    img_pts, img_pts_depth = view_points(img_pts, intrinsic, normalize=True)
 
     mask = ((depths > 1.0)
             & (img_pts[:, 0] > 1)
@@ -156,8 +160,9 @@ def proj_pc2img(pc_pts, lidar2cam, intrinsic, H, W):
             & (img_pts[:, 1] > 1)
             & (img_pts[:, 1] < H - 1))
     img_pts = img_pts[mask]
+    img_pts_depth = img_pts_depth[mask]
 
-    return img_pts
+    return img_pts, img_pts_depth
 
 
 def fill_empty_holes(pc, is_calc_normals=False, max_nn=30,
@@ -204,7 +209,7 @@ def get_grid_index(shape):
     return vv
 
 
-def get_dense_seg_label(dense_pc, seg_pc, device='cuda:0'):
+def get_dense_seg_label(dense_pc, seg_pc, device):
     """ Assign label to dense_pc from seg_pc
 
     Args:
@@ -223,11 +228,10 @@ def get_dense_seg_label(dense_pc, seg_pc, device='cuda:0'):
 
     dense_seg_pc = seg_pc[:, 3][idx]
     res = np.concatenate([dense_pc, dense_seg_pc[..., None]], axis=1)
-    torch.cuda.empty_cache()
     return res
 
 
-def assign_empty_pcd(pcd, cls_id_lis, device='cuda:0'):
+def assign_empty_pcd(pcd, cls_id_lis, device):
     """ Assign specify class id with nearset class
 
     Args:
@@ -291,16 +295,14 @@ def get_range_mask(pc, range_=None, is_mask=True):
     return pc, mask
 
 
-def pts_in_bbox(pc, bbox, device='cuda:0'):
+def pts_in_bbox(pc, bbox, device):
     # pc: [_, 4], bbox: [_, 7], return [B, N_pt, ]
     _pc = torch.from_numpy(pc[:, :3][None, ...]).to(device).float()
     _bbox = torch.from_numpy(bbox[None, ...]).to(device).float()
-    _res = points_in_boxes_all(_pc, _bbox).to('cpu')
-
-    # cpu
-    # points_in_boxes_cpu(torch.from_numpy(pc[:, :3][None, ...]),
-    #                            torch.from_numpy(bbox[None, ...]))
-
+    if 'cpu' in device:
+        _res = points_in_boxes_cpu(_pc, _bbox)
+    else:
+        _res = points_in_boxes_all(_pc, _bbox).to('cpu')
     return _res
 
 
@@ -421,6 +423,215 @@ def voxel_MA(pc, grid_size, mode='xy8'):
     return pc
 
 
+# >>> 对从图像获取lidar点云语义标签进行优化
+# 1. 收缩mask
+# 2. 按照距离对单个instance中的离群点进行删除
+def get_sorted_contours(mask, max_num=50):
+    contours, hierarchy = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    contours_lis = [{'pts': c, 'area': cv2.contourArea(c)} for c in contours[:max_num]]
+    contours_lis = sorted(contours_lis, key=lambda x:x['area'], reverse=True)
+    return contours_lis
+
+
+def erode_mask(mask, cls=None, area=None):
+    kernel = np.ones((3, 3), dtype=np.uint8)
+    mask_blank = np.zeros(mask.shape, dtype=np.uint8)
+    mask_res = (np.ones(mask.shape) * -1).astype(int)
+    # plt.imshow(mask)
+    # plt.savefig('t_src.jpg')
+    for i in np.unique(mask):
+        mask_one = mask == i
+        num = np.sum(mask_one)
+        _mask = mask_blank.copy()
+        _mask[mask_one] = 1
+        _mask = _mask.astype(np.uint8)
+        loop = 0
+        if num > 50000:
+            loop = 20
+        elif num > 10000:
+            loop = 10
+        elif num > 1000:
+            loop = 2  
+        if loop > 0:
+            _mask = cv2.erode(_mask, kernel, iterations=loop)
+        mask_res[_mask == 1] = i
+    # plt.imshow(mask_res)
+    # plt.savefig('mask_res.jpg')   
+    return mask_res
+
+
+def is_in_polygon(pts, polygon):
+    """判断点是否在polygon中(包括边缘)
+        pts = [(x, y), ...]
+        polygon = [(x1, y1), (x2, y2), (x3, y3), ...]
+    """
+    # >
+    img = np.ones((900, 1600, 3), dtype=np.uint8)
+    img = cv2.polylines(img, [polygon], 1, (0, 0, 255), 1)
+
+    n_pts = []
+    for pt in pts:
+        _pt = (int(pt[0]), int(pt[1]))
+        result = cv2.pointPolygonTest(polygon, _pt, False)
+        if result >= 0:
+            n_pts.append(pt)
+            # >
+            cv2.circle(img, _pt, radius=3, color=(0, 255, 0), thickness=-1)
+    cv2.imwrite('in_polygon.jpg', img)
+
+    return np.array(n_pts)
+
+
+def remove_outlier_gauss(pts):
+    vector = pts[:, 2]
+    mean = np.mean(vector)
+    std = np.std(vector)
+    threshold = 2 * std
+    outliers = np.abs(vector - mean) > threshold
+    filtered_pts = pts[~outliers]
+    return filtered_pts
+
+
+def remove_outlier_min_boxplot(pts):
+    vector = pts[:, 2]
+    # 绘制箱线图
+    plt.boxplot(vector)
+
+    # 计算箱线图的上下四分位数
+    q1, q3 = np.percentile(vector, [25, 75])
+
+    # 计算箱线图的上下边界
+    iqr = q3 - q1
+    lower_bound = q1 - 1.5 * iqr
+    upper_bound = q3 + 1.5 * iqr
+
+    # 标识离群点
+    # outliers = (vector < lower_bound) | (vector > upper_bound)
+    outliers = (vector > upper_bound)
+    plt.savefig('tmp.jpg')
+    # 剔除离群点
+    filtered_pts = pts[~outliers]
+    return filtered_pts
+
+
+from sklearn.cluster import DBSCAN
+from mpl_toolkits.mplot3d import Axes3D
+
+
+def remove_outlier_dbscan(pts):
+    X = pts[:, :3] / np.array([1600, 900, 50])
+    dbscan = DBSCAN(eps=0.05, min_samples=3)
+    labels = dbscan.fit_predict(X)
+
+    # 解析聚类结果
+    unique_labels = np.unique(labels)
+    num_clusters = len(unique_labels)
+
+    num_lis, dist_lis = list(), list()
+
+    for cluster_label in unique_labels:
+        cls_pts = pts[labels == cluster_label]
+        num_lis.append(len(cls_pts))
+        dist_lis.append(np.mean(cls_pts[:, 2]))
+
+    num_lis = np.array(num_lis)
+    dist_lis = np.array(dist_lis)
+
+    num_idx = np.argsort(-num_lis)
+    dist_idx = np.argsort(dist_lis)
+    score = num_idx + dist_idx
+    score_idx = np.argsort(-score)
+    label_idx = np.where(num_idx == 0)[0][0]
+    cluster_points = pts[labels == unique_labels[num_idx[0]]]
+    return cluster_points
+
+
+def filter_single_polygon(polygon, pts_3d, intrinsic, center=(450, 800, 25)):
+    _pts_3d = pts_3d.copy()
+
+    # 将x,y / d 得到图像上的点
+    _pts_3d[:, :2] = _pts_3d[:, :2] / _pts_3d[:, 2].reshape(-1, 1)
+    _pts = is_in_polygon(_pts_3d, polygon)
+    if len(_pts) == 0:
+        logger.debug("Get 0 points on mask area!")
+        return None, None
+
+    # 获取相机坐标系下的 图像中在polygon对应的点
+    # cam_pts = pts_3d[_pts[:, 3].astype(np.int)]
+    # remove_outlier_dbscan(cam_pts)
+    cam_pts = pts_3d[_pts[:, 3].astype(int)]
+    _pts = remove_outlier_dbscan(_pts)
+    filtered_cam_pts = pts_3d[_pts[:, 3].astype(int)]
+    # filtered_cam_pts = remove_outlier_min_boxplot(cam_pts)
+
+    # >
+    # values, counts = np.unique(np.round(cam_pts[:, 2], 1), return_counts=True)
+    # plt.bar(values, counts)
+    # plt.title('before')
+
+    # values, counts = np.unique(np.round(filtered_cam_pts[:, 2], 1), return_counts=True)
+    # plt.bar(values, counts)
+    # plt.title('after')
+
+    img = np.ones((900, 1600, 3), dtype=np.uint8)
+    img = cv2.polylines(img, [polygon], 1, (0, 0, 255), 1)
+    tmp = filtered_cam_pts.copy()
+    tmp[:, :2] = tmp[:, :2] / tmp[:, 2].reshape(-1, 1)
+    for pt in tmp:
+        cv2.circle(img, (int(pt[0]), int(pt[1])), radius=3, color=(0, 255, 0), thickness=-1)
+    cv2.imwrite('filter_in_polyghon.jpg', img)
+    # <
+
+    return filtered_cam_pts, cam_pts
+
+
+def filter_outlier(mask, img_pts_depth, intrinsic, cate_lis=[4,5,6,7,8,9,10,11,12,13,15,16]):
+    # 将图片中的点生成新的索引
+    idx = np.array([i for i in range(len(img_pts_depth))])
+    _img_pts_depth = img_pts_depth.copy()
+    _img_pts_depth[:, 3] = idx
+
+    img_new_pts = list()
+
+    # img = np.ones((900, 1600, 3), dtype=np.uint8)
+    for i in np.unique(mask):
+        # if i != 6:
+        #     continue
+        logger.debug(f"Processing cate {i}")
+        mask_one = mask == i
+        mask_one = mask_one.astype(np.uint8)
+        contours_lis = get_sorted_contours(mask_one)
+        for j, contour in enumerate(contours_lis):
+            logger.debug(f"Processing {i}_{j} polygon, area: {contour['area']}")
+            if contour['area'] < 100:
+                logger.debug(f"Area: {contour['area']} < 100, skip")
+                continue
+            polygon = contour['pts'].reshape(-1, 2)
+            fine_pts, cam_pts = filter_single_polygon(polygon, _img_pts_depth, intrinsic)
+            # if cam_pts is not None:
+            #     img_new_pts.append(cam_pts)
+            if i in cate_lis:
+                if fine_pts is not None:
+                    img_new_pts.append(fine_pts)
+            else:
+                if cam_pts is not None:
+                    img_new_pts.append(cam_pts)
+
+            # polygon_lis = polygon.tolist()
+            # polygon_lis = tuple(tuple(pt) for pt in polygon_lis)
+            # dic = {polygon_lis: {'area': contour['area']}}
+        # >
+        # img = busi.draw_polygon(img, dic, 'area', color=icolor.get_idx_color(j))
+        # cv2.imwrite('all_polygon.jpg', img)
+    if len(img_new_pts) == 0:
+        logger.warning(f"Not keep any pcd after filtered outliers, return src pcd")
+        return img_pts_depth
+    else:
+        return np.concatenate(img_new_pts, axis=0)
+
+# <<< 对从图像获取lidar点云语义标签进行优化
+
+
 # == deubg ==
 
 
@@ -442,3 +653,29 @@ def show_bbox_on_pc(pc, boxes):
         rect = patches.Rectangle(box.center[:2], wlh[0], wlh[1], angle=deg,
                                  linewidth=1, edgecolor='r', facecolor='none')
         ax.add_patch(rect)
+
+
+if __name__ == '__main__':
+    # from PIL import Image
+    # from ibasis import idraw
+    # mask_path = './data/nusc_seg/panoptic_seg_merge/CAM_FRONT_LEFT/n015-2018-07-24-11-22-45+0800__CAM_FRONT_LEFT__1532402928654844.png'
+    # mask_vis_path = './data/nusc_seg/panoptic_seg_merge_vis/CAM_FRONT_LEFT/n015-2018-07-24-11-22-45+0800__CAM_FRONT_LEFT__1532402928654844.jpg'
+    # img_vis = cv2.imread(mask_vis_path)
+    # mask_cls = np.array(Image.open(mask_path), dtype=np.uint8)
+    # print(np.unique(mask_cls))
+    # img_path = 'data/nuscenes/samples/CAM_FRONT_LEFT/n015-2018-07-24-11-22-45+0800__CAM_FRONT_LEFT__1532402928654844.jpg'
+    # # img = np.ones([900, 1600, 3]) * 128
+    # # img = img.astype(np.uint8)
+    # img = cv2.imread(img_path)
+    # img = idraw.draw_mask_on_img(img, msk=mask_cls, msk_type='class')
+    # cv2.imshow('img_vis', img_vis)
+    # cv2.imshow('t', img)
+    # erode_mask(mask_cls)
+    # # cv2.waitKey(0)
+    # pass
+
+    from ibasis import ibasisF as fn
+    # mask_cls, img_pts_depth, intrinsic = fn.load_pkl('test_data.pkl')
+    # filter_outlier(mask_cls, img_pts_depth, intrinsic)
+    pts = fn.load_pkl('pts.pkl')
+    remove_outlier_dbscan(pts)

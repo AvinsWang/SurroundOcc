@@ -3,7 +3,7 @@ cfg = {
     'version': 'v1.0-trainval',
     'nusc_val_fpath': 'tools/gen_occ_nus/nuscenes_val_list.txt',
     'split': 'all',
-    'save_dir': './__occ/dense_occ_debug_all',
+    'save_dir': '__occ/training_data/occ_label_0.2',
     'log_level': 'DEBUG',
     'scene_range': [0, 850],
 
@@ -48,6 +48,8 @@ cfg = {
     'is_save_vis_fig': False,
     'vis_fig_size': (28, 11),
     'is_voxel_MA': True,
+    # save lidar label from image seg as .npy, [x, y, z, cls]
+    'is_save_img_seg_label': True,
     # <<< setting for 'image_seg'
 }
 
